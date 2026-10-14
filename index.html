@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>新竹玻璃故事地圖</title>
+<meta name="description" content="從矽砂與天然氣，到全城做燈泡，再到少數留下：用1904年堡圖與今日地圖，看新竹玻璃產業一百多年的變遷。">
+<meta property="og:title" content="新竹玻璃故事地圖">
+<meta property="og:description" content="一座城，曾經點亮全世界。用百年地圖與今日地圖，看新竹玻璃產業的三個階段。">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="lib/maplibre-gl.css">
+<style>
+:root{
+  --ink:#1d1d1f; --paper:#fbfaf7; --accent:#b4451f; --muted:#5f5f5f; --line:#d9d4c8;
+  --card-bg:rgba(251,250,247,.95); --blue:#1b5e8a;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --ink:#ecebe6; --paper:#1c1c1e; --accent:#ec9068; --muted:#aeada7; --line:#3a3a3c; --card-bg:rgba(28,28,30,.94); --blue:#6fb0dc; }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} }
+html,body{margin:0;background:var(--paper);color:var(--ink);
+  font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;line-height:1.75}
+a{color:var(--accent)}
+:focus-visible{outline:3px solid #2b7de9;outline-offset:2px}
+#stage{position:fixed;inset:0;z-index:0;background:#e9e6dc}
+#map,#mapOld{position:absolute;inset:0}
+#map{transition:filter .6s}
+#map.soft{filter:grayscale(.85) contrast(.92) brightness(1.06)}
+#mapOld{pointer-events:none;clip-path:inset(0 100% 0 0)}
+
+/* 刷屏滑桿 */
+#handle{position:fixed;top:0;bottom:0;left:50%;width:44px;margin-left:-22px;z-index:5;cursor:ew-resize;display:none;touch-action:none}
+#handle::before{content:"";position:absolute;left:21px;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 4px rgba(0,0,0,.6)}
+#handle::after{content:"◀ ▶";position:absolute;left:0;top:50%;transform:translateY(-50%);width:44px;height:28px;border-radius:14px;
+  background:#fff;color:#333;font-size:10px;line-height:28px;text-align:center;box-shadow:0 1px 6px rgba(0,0,0,.5)}
+#handle.hint::after{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 1px 6px rgba(0,0,0,.5),0 0 0 0 rgba(255,255,255,.9)}50%{box-shadow:0 1px 6px rgba(0,0,0,.5),0 0 0 12px rgba(255,255,255,0)}}
+#swHint{position:fixed;left:50%;top:calc(50% + 28px);transform:translateX(-50%);z-index:5;display:none;pointer-events:none;
+  background:rgba(0,0,0,.7);color:#fff;font-size:12px;padding:2px 10px;border-radius:10px;white-space:nowrap}
+.tag{position:absolute;top:54px;z-index:4;padding:3px 10px;border-radius:12px;background:rgba(0,0,0,.68);color:#fff;font-size:13px;display:none}
+#tagOld{left:14px}#tagNew{right:14px}
+@media (prefers-reduced-motion: reduce){ #handle.hint::after{animation:none} }
+
+/* 照片背景層 */
+#photo{position:fixed;inset:0;z-index:1;opacity:0;pointer-events:none;transition:opacity .8s ease;background:#17171b center/cover no-repeat}
+#photo.on{opacity:1}
+#photo::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.5),rgba(0,0,0,.08) 65%)}
+#photoCap{position:absolute;left:18px;bottom:16px;right:18px;color:#fff;font-size:12px;text-shadow:0 1px 3px #000;z-index:2;opacity:.9}
+
+/* 頂部導覽與進度 */
+#prog{position:fixed;left:0;top:0;height:3px;background:var(--accent);z-index:40;width:0}
+#nav{position:fixed;top:3px;left:0;right:0;z-index:30;display:flex;gap:6px;align-items:center;padding:8px 12px;
+  overflow-x:auto;scrollbar-width:none;background:linear-gradient(rgba(0,0,0,.42),rgba(0,0,0,0))}
+#nav::-webkit-scrollbar{display:none}
+#nav .brand{color:#fff;font-weight:700;font-size:14px;letter-spacing:.08em;margin-right:6px;white-space:nowrap;text-shadow:0 1px 3px #000}
+#nav button{flex:none;border:0;border-radius:14px;padding:3px 12px;font:inherit;font-size:13px;line-height:1.6;cursor:pointer;
+  background:rgba(255,255,255,.88);color:#333}
+#nav button[aria-current="true"]{background:var(--accent);color:#fff}
+
+/* 載入與錯誤 */
+#loading{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:var(--paper);
+  color:var(--muted);font-size:15px;transition:opacity .5s}
+#loading.off{opacity:0;pointer-events:none}
+#err{position:fixed;left:50%;top:48px;transform:translateX(-50%);z-index:45;background:#7a1f12;color:#fff;border-radius:8px;
+  padding:6px 14px;font-size:13px;display:none;max-width:92vw}
+
+/* 卡片 */
+#story{position:relative;z-index:10;pointer-events:none}
+.step{min-height:100vh;display:flex;align-items:center;padding:56px 24px}
+.step.right{justify-content:flex-end}
+.card{pointer-events:auto;width:min(430px,100%);background:var(--card-bg);border:1px solid var(--line);border-radius:10px;
+  padding:20px 22px;box-shadow:0 4px 24px rgba(0,0,0,.18);backdrop-filter:blur(3px)}
+.card.wide{width:min(540px,100%)}
+.kicker{font-size:12px;letter-spacing:.1em;color:var(--accent);margin:0 0 4px;font-weight:600}
+.card h1,.card h2{margin:0 0 8px;line-height:1.35}
+.card h1{font-size:28px}
+.card h2{font-size:22px}
+.card p{margin:.5em 0;font-size:15.5px}
+.card .src{font-size:12px;color:var(--muted);line-height:1.6}
+.card ul.src,.card details.src ul{margin:.4em 0;padding-left:1.15em}
+.card ul.src li,.card details.src li{margin:.15em 0}
+.card .foot{font-size:12px;color:var(--muted);margin:.2em 0 .4em}
+.tip{color:var(--accent);font-weight:600}
+.card .note{font-size:13px;color:var(--ink);line-height:1.6;margin:.4em 0}
+details.src{margin:.4em 0}
+details.src summary{cursor:pointer;color:var(--accent);font-size:12.5px}
+.cue{font-size:13px;color:var(--muted);margin-top:10px}
+.pub{display:inline-block;font-size:11px;border:1px solid var(--accent);color:var(--accent);border-radius:8px;padding:0 6px;margin-right:4px}
+.eras{margin:10px 0 6px}
+.era{padding:8px 0}
+.era h3{margin:0 0 2px;font-size:13px;font-weight:700;color:var(--accent);letter-spacing:.04em}
+.era p{margin:0;font-size:14.5px}
+.verdict{margin:8px 0 4px;padding:8px 0 0;border-top:1px solid var(--line);font-weight:600;font-size:15px}
+.bars{margin:10px 0}
+.bar{display:flex;align-items:center;gap:8px;font-size:12.5px;margin:4px 0}
+.bar .y{width:62px;flex:none}
+.bar i{display:block;height:12px;border-radius:3px;background:var(--accent)}
+.bar i.q{background:repeating-linear-gradient(45deg,var(--accent) 0 4px,transparent 4px 8px);border:1px solid var(--accent)}
+.legend{position:fixed;right:14px;bottom:34px;z-index:20;background:var(--card-bg);border:1px solid var(--line);border-radius:8px;
+  padding:8px 12px;font-size:12px;display:none}
+.legend b{display:block;margin-bottom:4px}
+.legend-inline{display:none;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;margin:.3em 0}
+.legend-inline i{display:inline-block;border-radius:50%;background:rgba(180,69,31,.55);border:1.5px solid #7a2a10;vertical-align:middle;margin-right:3px}
+.legend .row{display:flex;align-items:center;gap:8px;margin:2px 0}
+.legend i{display:inline-block;border-radius:50%;background:rgba(180,69,31,.55);border:1.5px solid #7a2a10}
+
+/* 地圖上的文字標籤 */
+.maplibregl-popup-content{background:var(--card-bg);color:var(--ink);font-size:15px;line-height:1.5;padding:10px 26px 10px 14px;border:1px solid var(--line)}
+.maplibregl-popup-content b{font-size:17px}
+.maplibregl-popup-close-button{color:var(--ink);font-size:20px}
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip{border-top-color:var(--card-bg)}
+.maplibregl-popup-anchor-top .maplibregl-popup-tip{border-bottom-color:var(--card-bg)}
+.maplibregl-popup-anchor-left .maplibregl-popup-tip{border-right-color:var(--card-bg)}
+.maplibregl-popup-anchor-right .maplibregl-popup-tip{border-left-color:var(--card-bg)}
+.cnt{font:700 15px/1 sans-serif;color:#fff;text-shadow:0 0 3px #5a1e0a,0 0 3px #5a1e0a,0 0 2px #5a1e0a;pointer-events:none}
+.rd{position:relative;pointer-events:none}
+.rd i{display:block;width:100%;height:100%;border-radius:50%;background:rgba(180,69,31,.5);border:3px solid #7a2a10;box-shadow:0 0 0 2px rgba(255,255,255,.7)}
+.rd b{position:absolute;top:50%;transform:translateY(-50%);white-space:nowrap;font-size:19px;line-height:1.15;color:#2a0f05;
+  text-shadow:-2px -2px 0 #fff,2px -2px 0 #fff,-2px 2px 0 #fff,2px 2px 0 #fff,0 0 6px #fff}
+.rd b small{display:block;font-size:15px;color:#7a2a10}
+.rd.r b{left:100%;margin-left:8px}.rd.l b{right:100%;margin-right:8px;text-align:right}
+.lbl{font-size:15px;font-weight:700;color:#3a1608;text-shadow:-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff,1px 1px 0 #fff,0 0 4px #fff;
+  white-space:nowrap;pointer-events:none}
+.pin{display:none;flex-direction:column;align-items:center;font-size:18px;font-weight:700;pointer-events:none}
+.pin span{max-width:280px;text-align:center;line-height:1.3;background:#fff;color:#222;border:3px solid var(--c);border-radius:14px;padding:3px 12px;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.pin em{width:24px;height:24px;border-radius:50%;background:var(--c);border:2px solid #fff;margin-top:2px;box-shadow:0 0 3px rgba(0,0,0,.6)}
+
+/* 結尾：出處與說明（不屬於地圖章節） */
+#credits{position:relative;z-index:10;background:var(--paper);padding:48px 24px 64px;border-top:1px solid var(--line)}
+#credits .in{max-width:720px;margin:0 auto}
+#credits h2{font-size:20px;margin:0 0 6px}
+#credits h3{font-size:14px;margin:22px 0 4px;color:var(--accent)}
+#credits p,#credits li{font-size:14px;margin:.3em 0}
+#credits ul{padding-left:1.2em;margin:.3em 0}
+#credits .top{margin-top:26px}
+sup.ref{font-size:.7em;line-height:0;margin-left:1px}
+sup.ref a{color:var(--accent);text-decoration:none;padding:0 1px}
+#credits ol.refs{list-style:none;padding-left:0}
+#credits ol.refs li{padding-left:2.2em;text-indent:-2.2em;margin:.5em 0;line-height:1.7}
+#credits ol.refs .n{display:inline-block;width:2.2em;text-indent:0;color:var(--accent);font-weight:600}
+#credits .top button{font:inherit;font-size:14px;border:1px solid var(--accent);color:var(--accent);background:none;border-radius:16px;padding:4px 16px;cursor:pointer}
+
+@media (max-width:640px){
+  .step{align-items:flex-end;padding:56px 10px 18px}
+  .step.right{justify-content:flex-start}
+  .card{padding:12px 14px;max-height:56vh;overflow-y:auto}
+  .era{padding:5px 0}.era p{font-size:13.5px}.verdict{font-size:14px}.card .note{font-size:12.5px}
+  .card h1{font-size:23px}.card h2{font-size:19px}.card p{font-size:14.5px}
+  .legend{display:none !important}
+  .legend-inline{display:flex}
+  .pin{font-size:14px}.pin span{max-width:170px;padding:2px 9px}.pin em{width:18px;height:18px}
+  #credits{padding:36px 16px 48px}
+}
+</style>
+</head>
+<body>
+<div id="prog"></div>
+<nav id="nav" aria-label="章節導覽"></nav>
+<div id="loading" role="status">地圖載入中…</div>
+<div id="err" role="alert">地圖圖磚載入失敗，可能是網路或圖磚服務暫時無法使用。請重新整理，或稍後再試。</div>
+
+<div id="stage" aria-hidden="true">
+  <div id="map"></div>
+  <div id="mapOld"></div>
+  <span id="tagOld" class="tag">1904 臺灣堡圖</span><span id="tagNew" class="tag">今日地圖</span>
+</div>
+<div id="handle" role="slider" tabindex="0" aria-label="今昔地圖比較滑桿：左側為1904年臺灣堡圖，右側為今日地圖" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
+<div id="swHint">← 拖動比較今昔 →</div>
+<div id="photo" role="img" aria-label=""><div id="photoCap"></div></div>
+<div class="legend" id="legend"><b>民國66年名冊・玻璃工廠家數</b></div>
+
+<main id="story">
+  <!-- 0 封面：今昔刷屏 -->
+  <section class="step" data-step="0" aria-label="封面"><article class="card">
+    <p class="kicker">新竹玻璃故事地圖</p>
+    <h1>一座城，曾經點亮全世界</h1>
+    <p>民國五十年代，全世界的聖誕燈泡，約八成<sup class="ref"><a href="#ref1">1</a></sup>出自新竹。今天的南大路一帶，早已是一般的街廓。</p>
+    <p class="tip">拖動畫面中央的滑桿，比較 1904 年與今天的新竹。</p>
+    <p class="cue">往下捲動，從頭看起 ↓</p>
+  </article></section>
+
+  <!-- 1 階段一（艋舺） -->
+  <section class="step right" data-step="1" aria-label="階段一"><article class="card">
+    <p class="kicker">階段一｜1884–1945　日治時期，起步</p>
+    <h2>第一家玻璃廠，在艋舺</h2>
+    <p>1884 年，艋舺仕紳陳義塗設立臺灣第一家玻璃廠。</p>
+    <p>但這門生意的根，後來長在新竹：原料與燃料，都在新竹的山裡。</p>
+  </article></section>
+
+  <!-- 2 階段一（北埔、竹東、新竹） -->
+  <section class="step" data-step="2" aria-label="階段一"><article class="card">
+    <p class="kicker">階段一｜1884–1945　日治時期，起步</p>
+    <h2>矽砂與天然氣，把玻璃業引來新竹</h2>
+    <p>1913 年，北埔發現可供玻璃業使用的矽砂；1934 年，竹東噴出天然氣。原料與燃料都在家門口，1939 年新竹設立臺灣高級硝子工業株式會社，戰時轉向醫療與工業用玻璃。</p>
+    <p>技術與人才，成為戰後的底子。</p>
+    <ul class="src"><li>地圖標示為地名位置，非廠址。</li></ul>
+  </article></section>
+
+  <!-- 3 階段二（分工） -->
+  <section class="step right" data-step="3" aria-label="階段二"><article class="card">
+    <p class="kicker">階段二｜1945–1980　外銷年代，全城都在做</p>
+    <h2>一個產業，三地分工</h2>
+    <p>1946 年，日資玻璃單位整併為省營臺灣玻璃工業公司。1960 年代轉向外銷，聖誕燈泡成為主力。</p>
+    <div class="bars" role="img" aria-label="燈泡廠家數：民國50年不到100家，民國59年增至250家">
+      <div class="bar"><span class="y">民國50年</span><i class="q" style="width:64px"></i><span>不到 100 家</span></div>
+      <div class="bar"><span class="y">民國59年</span><i style="width:160px"></i><span>250 家</span></div>
+    </div>
+    <p>新竹市是製造加工中心，竹東供應原料與平板玻璃，竹南做容器與燈罩。</p>
+    <ul class="src"><li>地圖標示為地名位置。</li></ul>
+  </article></section>
+
+  <!-- 4 階段二（66年分布圓圈） -->
+  <section class="step" data-step="4" aria-label="階段二"><article class="card">
+    <p class="kicker">階段二｜民國66年的分布</p>
+    <h2>156 家，擠在哪幾條路上</h2>
+    <p>光復路 17 家、西大路 11 家、南大路 10 家。圓越大，代表同一條路或同一個地名下的工廠越多。</p>
+    <p class="tip">點圓圈可看路名與家數。</p>
+    <div class="legend-inline" id="legendInline" aria-label="圓圈大小圖例"><span>圓圈大小：</span></div>
+    <ul class="src"><li>資料：新竹縣玻璃商業同業公會會員名冊<sup class="ref"><a href="#ref2">2</a></sup>，按路名或地名歸組。</li><li>圓圈位置是路名或地名的中心，不是實際廠址。</li></ul>
+  </article></section>
+
+  <!-- 5 階段二（南大路今昔刷屏） -->
+  <section class="step" data-step="5" aria-label="階段二"><article class="card">
+    <p class="kicker">階段二｜南大路、西大路一帶</p>
+    <h2>密集的地方，現在長什麼樣</h2>
+    <p>左側是 1904 年的臺灣堡圖，右側是今天。民國 66 年的名冊裡，西大路 11 家、南大路 10 家、中山路 9 家，都在這一帶。</p>
+    <p class="tip">拖動滑桿，看街廓怎麼長出來。</p>
+    <ul class="src"><li>名冊家數同上一頁。</li><li>路名標籤位置為路名分組中心。</li></ul>
+  </article></section>
+
+  <!-- 6 階段三 -->
+  <section class="step right" data-step="6" aria-label="階段三"><article class="card">
+    <p class="kicker">階段三｜1980 至今　離開與轉型</p>
+    <h2>人才、土地與訂單，都往別處去</h2>
+    <p>1980 年，新竹科學園區成立，勞動力、土地與資金的去向從此改變；兩次石油危機與新臺幣升值，又墊高成本。訂單與工廠陸續移往大陸與東南亞，聖誕燈泡走得最早；1913 年發現的矽砂，在地採砂也於 1990 年結束，原料改靠進口。</p>
+    <p>工廠數在 1987–88 年超過 90 家，1990 年前剩 70 餘家；香山工業區原有 40 家，後來只剩 9 家。*留下的，轉向文化、工藝與再生，但不等於產業復興。</p>
+    <p class="foot">* 家數為報紙與既有研究估計的營運工廠數，不是稅籍登記數，兩者不能直接對照。</p>
+    <ul class="src"><li>園區不是玻璃業衰退的唯一原因，成本、匯率與外移一起發生。</li><li>淡色圓圈為民國66年的分布。</li></ul>
+  </article></section>
+
+  <!-- 7 合成／華夏 -->
+  <section class="step right" data-step="7" aria-label="兩間工廠"><article class="card wide">
+    <p class="kicker">兩間工廠的前世今生 ①</p>
+    <h2>華夏玻璃：從煤油燈罩到自有品牌</h2>
+    <div class="eras">
+      <div class="era"><h3>民國66年（1977）</h3><p>名冊列「合成玻璃工廠」，頂竹里<sup class="ref"><a href="#ref2">2</a></sup>。1925 年廖啟明在東南街創立合成玻璃，以人工吹製煤油燈、器皿、電表蓋<sup class="ref"><a href="#ref4">4</a></sup>。</p></div>
+      <div class="era"><h3>民國82年（1993）</h3><p>名冊上，東南街53巷16號仍有合成（60 人，電表蓋、玻璃殼）；牛埔路93巷49號是華夏（539 人，小型瓶、玻璃壓製器具）<sup class="ref"><a href="#ref3">3</a></sup>。</p></div>
+      <div class="era"><h3>今天</h3><p>自有品牌「Aqua Soul」、2018 年導入 ERP、經營 Podcast《玻璃兄弟玻科客》<sup class="ref"><a href="#ref4">4</a></sup>。</p></div>
+    </div>
+    <p class="verdict">對照：從東南街的煤油燈與電表蓋，到 82 年 539 人的規模；1991 年也曾赴無錫設廠，如今走向自有品牌。</p>
+    <details class="src"><summary>出處與說明</summary><ul>
+      <li>沿革：1925 年創立合成玻璃，後遷至現址、改名聯成，1974 年改名華夏<sup class="ref"><a href="#ref4">4</a></sup>。國家文化記憶庫記為 1977 年定名華夏<sup class="ref"><a href="#ref5">5</a></sup>。</li>
+      <li>66 年名冊列合成、未列華夏；82 年名冊合成與華夏各一列，兩列並存的原因未查證。</li>
+      <li>地圖位置依國家文化記憶庫記載的原址（東南街53巷16號）<sup class="ref"><a href="#ref5">5</a></sup>與 82 年名錄地址<sup class="ref"><a href="#ref3">3</a></sup>，為路段概略位置，非門牌座標。</li>
+      <li>近況：華夏官網沿革紀事<sup class="ref"><a href="#ref4">4</a></sup>（Aqua Soul 產品線、2018 年導入 SAP／ERP、Podcast 連結）。「第四代兄弟接班」見 Tatler Asia 報導（2019-11-13），未放在卡片上；年份與品牌以官網為準。</li></ul></details>
+  </article></section>
+
+  <!-- 8 新生 -->
+  <section class="step" data-step="8" aria-label="兩間工廠"><article class="card wide">
+    <p class="kicker">兩間工廠的前世今生 ②</p>
+    <h2>新生高級玻璃：理化儀器玻璃廠</h2>
+    <div class="eras">
+      <div class="era"><h3>民國66年（1977）</h3><p>名冊列「新生高級玻璃工廠」，香山鄉松樹腳2號，只能定位到牛埔里<sup class="ref"><a href="#ref2">2</a></sup>。</p></div>
+      <div class="era"><h3>民國82年（1993）</h3><p>牛埔路239號，28 人；理化醫學用玻璃儀器、安瓿管、特殊瓶<sup class="ref"><a href="#ref3">3</a></sup>。</p></div>
+      <div class="era"><h3>今天</h3><p>創辦人之子林松陳（1957 年生）經營亞松耐熱玻璃；他結束了理化儀器玻璃的生產，蘭花瓶改與江蘇鹽城的工廠合作。新生全盛時期有 100 多名員工<sup class="ref"><a href="#ref6">6</a></sup>。</p></div>
+    </div>
+    <p class="verdict">對照：華夏長成規模並走向品牌；新生一脈的亞松，結束了理化儀器玻璃的生產。</p>
+    <details class="src"><summary>出處與說明</summary><ul>
+      <li>「今天」只有訪談來源，未查到公開的工商資料。</li>
+      <li>名冊代表人為林孝中，與受訪者林松陳的關係未查證。</li>
+      <li>66 年與 82 年的對應依名稱與口述，不是同址比對。</li>
+      <li>地圖位置為路段概略位置，非門牌座標。</li>
+      <li>新生在民國82年名錄的資料見 p.124。</li></ul></details>
+  </article></section>
+
+  <!-- 9 結語 -->
+  <section class="step right" data-step="9" aria-label="結語"><article class="card">
+    <p class="kicker">結語</p>
+    <h2>從產業到記憶</h2>
+    <p>一本泛黃的名冊，把當年的工廠重新攤回街道上。有些點今天已經空了，但少數幾個，還亮著。</p>
+    <p>玻璃工藝博物館，把作品與故事留在原來的城市；高溫的手藝與師徒傳承，則是最難留下的。</p>
+  </article></section>
+</main>
+
+<section id="credits" aria-label="資料說明與出處"><div class="in">
+  <h2>資料說明與出處</h2>
+  <h3>怎麼讀這張地圖</h3>
+  <ul>
+    <li>民國66年的圓圈是「路名或地名」的中心，不是實際廠址；圓越大代表同一條路上的家數越多。</li>
+    <li>民國82年與兩間工廠的點位，是依名冊地址在路段上的概略位置，不是門牌座標。</li>
+    <li>階段一、三的地名標示（北埔、竹東、新竹科學園區等）為地名位置，用來說明故事，不是廠址。</li>
+    <li>名冊為掃描文件經文字辨識整理，地址與數字可能有誤，已盡量對照原件。</li>
+    <li>本頁的「家數」有三種口徑：新竹縣玻璃商業同業公會會員名冊（156 家）、報紙與研究估計的營運工廠數（90、70 餘、40、9 家）、稅籍登記數。三者不能互相換算。</li>
+  </ul>
+  <h3>參考文獻</h3>
+  <ol class="refs">
+    <li id="ref1"><span class="n">1</span>林佳琪（2023）。<i>產業轉型路徑與能動性之研究——以新竹玻璃產業為例</i>〔碩士論文，國立臺北大學〕。</li>
+    <li id="ref2"><span class="n">2</span>新竹縣玻璃商業同業公會（1977）。<i>新竹縣玻璃商業同業公會會員名冊</i>（66年3月10日核對重編）〔未出版資料，蔡松平提供〕。</li>
+    <li id="ref3"><span class="n">3</span><i>新竹玻璃工藝博物館研究規劃報告：新竹地區行政區域暨玻璃相關廠商名錄</i>（1993年6月30日）。</li>
+    <li id="ref4"><span class="n">4</span>華夏玻璃集團（無日期）。<i>沿革紀事</i>。<a href="https://www.hwahsiaglass.com/tw/about/company-profile/milestone" target="_blank" rel="noopener">https://www.hwahsiaglass.com/tw/about/company-profile/milestone</a></li>
+    <li id="ref5"><span class="n">5</span>新竹市文化局（無日期）。<i>國家文化記憶庫</i>〔CC BY 3.0 TW〕。<a href="https://memory.culture.tw/" target="_blank" rel="noopener">https://memory.culture.tw/</a></li>
+    <li id="ref6"><span class="n">6</span>林松陳（個人訪談）。</li>
+  </ol>
+  <ul>
+    <li>內文數字為對應上方參考文獻的編號。「第四代兄弟接班」一說見 Tatler Asia 報導（2019-11-13），未放在卡片上。</li>
+  </ul>
+  <h3>地圖</h3>
+  <ul>
+    <li>今日地圖：內政部國土測繪中心電子地圖。</li>
+    <li>歷史地圖：中央研究院人文社會科學研究中心 GIS 專題中心「臺灣百年歷史地圖」，1904 年臺灣堡圖。</li>
+    <li>地圖軟體：MapLibre GL JS（BSD-3-Clause）。</li>
+  </ul>
+  <h3>版本</h3>
+  <p>2026-10-14 版（build <span id="build"></span>）。</p>
+  <p class="top"><button type="button" id="toTop">回到開頭</button></p>
+</div></section>
+
+<noscript><p style="position:fixed;inset:0;z-index:99;background:#fbfaf7;color:#222;padding:40px">此故事地圖需要啟用 JavaScript 才能顯示。</p></noscript>
+
+<script src="lib/maplibre-gl.js"></script>
+<script src="data/data.js"></script>
+<script>
+const NEW_TILES = ["https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}"];
+const OLD_TILES = ["https://gis.sinica.edu.tw/tileserver/file-exists.php?img=JM20K_1904-jpg-{z}-{x}-{y}"];
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const BUILD = "20261014b";
+const $ = id => document.getElementById(id);
+
+const styleOf = (tiles, maxzoom) => ({
+  version: 8,
+  sources: { r: { type: "raster", tiles, tileSize: 256, maxzoom } },
+  layers: [{ id: "r", type: "raster", source: "r" }]
+});
+const view0 = { center: [120.97, 24.80], zoom: 12.3 };
+/* 鏡頭由捲動控制；使用者要縮放地圖需按 Ctrl＋滾輪（手機兩指），平常滾輪與單指仍是捲頁 */
+const lock = { cooperativeGestures: true, dragRotate: false, pitchWithRotate: false, touchPitch: false,
+  locale: { "CooperativeGesturesHandler.WindowsHelpText": "按住 Ctrl 並滾動滑鼠，才能縮放地圖",
+            "CooperativeGesturesHandler.MacHelpText": "按住 ⌘ 並滾動滑鼠，才能縮放地圖",
+            "CooperativeGesturesHandler.MobileHelpText": "用兩指移動地圖" } };
+const map = new maplibregl.Map({ container: "map", style: styleOf(NEW_TILES, 18), ...view0, ...lock, attributionControl: false });
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-left");
+map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: "底圖 © 內政部國土測繪中心｜歷史地圖 © 中央研究院人社中心GIS專題中心" }));
+const old = new maplibregl.Map({ container: "mapOld", style: styleOf(OLD_TILES, 16), ...view0, interactive: false, attributionControl: false });
+const sync = () => old.jumpTo({ center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() });
+map.touchZoomRotate.disableRotation();
+map.on("move", sync);
+
+/* ---- 圖磚錯誤提示 ---- */
+let tileErr = 0;
+function showErr(msg) { console.error(msg); const e = $("err"); e.textContent = msg; e.style.display = "block"; }
+const onErr = e => { if (e && e.sourceId === "r" && ++tileErr >= 4) showErr("地圖圖磚載入失敗，可能是網路或圖磚服務暫時無法使用。請重新整理，或稍後再試。"); };
+map.on("error", onErr); old.on("error", onErr);
+map.once("idle", () => $("loading").classList.add("off"));
+setTimeout(() => $("loading").classList.add("off"), 8000);
+
+/* ---- 刷屏 ---- */
+const handle = $("handle"), mapOldEl = $("mapOld");
+let swipePos = 0.5, swipeOn = false;
+function setSwipe(p) {
+  swipePos = p = Math.min(1, Math.max(0, p));
+  mapOldEl.style.clipPath = `inset(0 ${(1 - p) * 100}% 0 0)`;
+  handle.style.left = (p * 100) + "%";
+  handle.setAttribute("aria-valuenow", Math.round(p * 100));
+  $("swHint").style.left = (p * 100) + "%";
+}
+function showSwipe(on, pos) {
+  swipeOn = on;
+  mapOldEl.style.display = on ? "block" : "none";
+  handle.style.display = on ? "block" : "none";
+  $("tagOld").style.display = on ? "block" : "none";
+  $("tagNew").style.display = on ? "block" : "none";
+  $("swHint").style.display = on && !touched ? "block" : "none";
+  handle.classList.toggle("hint", on && !touched);
+  if (on) { setSwipe(pos); old.resize(); sync(); }
+}
+let drag = false, touched = false;
+const touch = () => { if (!touched) { touched = true; $("swHint").style.display = "none"; handle.classList.remove("hint"); } };
+handle.addEventListener("pointerdown", e => { drag = true; touch(); handle.setPointerCapture(e.pointerId); });
+handle.addEventListener("pointermove", e => { if (drag) setSwipe(e.clientX / innerWidth); });
+handle.addEventListener("pointerup", () => drag = false);
+handle.addEventListener("keydown", e => {
+  const d = { ArrowLeft: -0.05, ArrowDown: -0.05, ArrowRight: 0.05, ArrowUp: 0.05 }[e.key];
+  if (d) { e.preventDefault(); touch(); setSwipe(swipePos + d); }
+});
+
+/* ---- 地點與資料 ---- */
+const P = { mk: [121.4999, 25.0372], bp: [121.0577, 24.6999], jd: [121.0941, 24.7381], hc: [120.9720, 24.8034],
+            jn: [120.8804, 24.6866], sp: [121.0150, 24.7736], gm: [120.9782, 24.8013] };
+const FAC = { hs: [[120.9742, 24.7994], [120.9393, 24.7963]], xs: [[120.9427, 24.7901], [120.9478, 24.8001]] };
+const groups = {};                       // group -> [marker elements]
+function addMarker(g, lngLat, html, opts) {
+  const el = document.createElement("div");
+  el.className = opts.cls; el.innerHTML = html;
+  if (opts.color) el.style.setProperty("--c", opts.color);
+  new maplibregl.Marker({ element: el, anchor: opts.anchor || "bottom", offset: opts.offset }).setLngLat(lngLat).addTo(map);
+  (groups[g] = groups[g] || []).push(el);
+}
+const pin = (g, ll, text, color) => addMarker(g, ll, `<span>${text}</span><em></em>`, { cls: "pin", color });
+
+let ready = false;
+map.once("style.load", () => { try {
+  /* 資料內嵌在 data/data.js（由 build_data.py 產生），不用 fetch，雙擊開檔也能用 */
+  const { agg, fac } = window.STORY_DATA;
+  map.addSource("agg", { type: "geojson", data: agg });
+  map.addLayer({ id: "agg-c", type: "circle", source: "agg", layout: { visibility: "none" },
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["zoom"],
+        11, ["+", 3, ["*", 3, ["sqrt", ["get", "n"]]]], 15, ["+", 5, ["*", 6, ["sqrt", ["get", "n"]]]]],
+      "circle-color": "#b4451f", "circle-opacity": 0.55, "circle-stroke-color": "#7a2a10", "circle-stroke-width": 1.5, "circle-stroke-opacity": 1 } });
+  const ranked = agg.features.map(f => f.properties.n).sort((a, b) => b - a);
+  const popHtml = p => `<b>${p.label}</b><br>${p.n} 家（全區第 ${ranked.indexOf(p.n) + 1} 多）`;
+  let pop = null;
+  window.closePop = () => { if (pop) { pop.remove(); pop = null; } };
+  window.demoPop = () => {                       // 進入圓圈章時，自動彈出最大的圓當示範
+    closePop();
+    const top = agg.features.reduce((a, b) => b.properties.n > a.properties.n ? b : a);
+    pop = new maplibregl.Popup({ closeOnClick: false }).setLngLat(top.geometry.coordinates).setHTML(popHtml(top.properties)).addTo(map);
+  };
+  map.on("click", "agg-c", e => {
+    if (!STEPS[current].circles) return;
+    closePop();
+    pop = new maplibregl.Popup().setLngLat(e.lngLat).setHTML(popHtml(e.features[0].properties)).addTo(map);
+  });
+  map.on("mouseenter", "agg-c", () => { if (STEPS[current].circles) map.getCanvas().style.cursor = "pointer"; });
+  map.on("mouseleave", "agg-c", () => map.getCanvas().style.cursor = "");
+
+  /* 民國66年：n>=5 的路名標籤；南大路一帶另標路名 */
+  agg.features.forEach(f => {
+    const L = f.properties.label, n = f.properties.n;
+    const circ = n >= 5, road = ["南大路", "西大路", "中山路", "東南街"].includes(L);
+    if (n >= 3) {                                  // 圓圈中的家數（頁面元件，不依賴字型檔）
+      const c = document.createElement("div"); c.className = "cnt"; c.textContent = n; c.style.display = "none";
+      new maplibregl.Marker({ element: c, anchor: "center" }).setLngLat(f.geometry.coordinates).addTo(map);
+      (groups.circ = groups.circ || []).push(c);
+    }
+    if (circ) {
+      const el = document.createElement("div"); el.className = "lbl"; el.textContent = L; el.style.display = "none";
+      new maplibregl.Marker({ element: el, anchor: "left", offset: [14, 0] }).setLngLat(f.geometry.coordinates).addTo(map);
+      (groups.circ = groups.circ || []).push(el);
+    }
+    if (road) {                                    // 南大路章：圓圈（依家數）＋路名＋家數，放在兩張地圖之上
+      const D = Math.round(22 + 8 * Math.sqrt(n));
+      const el = document.createElement("div");
+      el.className = "rd " + (["南大路", "東南街"].includes(L) ? "r" : "l");
+      el.style.width = el.style.height = D + "px"; el.style.display = "none";
+      el.innerHTML = `<i></i><b>${L}<small>${n} 家</small></b>`;
+      new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(f.geometry.coordinates).addTo(map);
+      (groups.roads = groups.roads || []).push(el);
+    }
+  });
+
+  try {
+  /* 路線：階段一的資源路線、兩間工廠 66→82 年的連線 */
+  const line = (g, c, pts, dash) => ({ type: "Feature", properties: { g, c, dash }, geometry: { type: "LineString", coordinates: pts } });
+  const fp = id => fac.features.find(f => f.properties.id === id).geometry.coordinates;
+  map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: [
+    line("s1b", "#b4451f", [P.mk, P.bp, P.jd, P.hc]),
+    line("hs", "#1b5e8a", [fp("hs66"), fp("hx82")]),
+    line("xs", "#1b5e8a", [fp("xs66"), fp("xs82")]) ] } });
+  map.addLayer({ id: "routes", type: "line", source: "routes", filter: ["==", ["get", "g"], ""],
+    paint: { "line-color": ["get", "c"], "line-width": 2.5, "line-dasharray": [2, 2] } });
+
+  /* 階段一、二、三的地名標示 */
+  pin("s1a", P.mk, "1884　艋舺：臺灣第一家玻璃廠", "#b4451f");
+  pin("s1b", P.bp, "1913　北埔：發現矽砂", "#b4451f");
+  pin("s1b", P.jd, "1934　竹東：噴出天然氣", "#b4451f");
+  pin("s1b", P.hc, "1939　新竹：硝子株式會社", "#b4451f");
+  pin("s2a", P.hc, "新竹市・製造加工", "#b4451f");
+  pin("s2a", P.jd, "竹東・原料與平板玻璃", "#b4451f");
+  pin("s2a", P.jn, "竹南（苗栗）・容器與燈罩", "#b4451f");
+  pin("s3a", P.sp, "1980　新竹科學園區成立", "#1b5e8a");
+  pin("s3a", P.gm, "玻璃工藝博物館", "#1b5e8a");
+  pin("end", P.gm, "新竹市立玻璃工藝博物館", "#1b5e8a");
+
+  /* 兩間工廠的點位 */
+  fac.features.forEach(f => {
+    const p = f.properties;
+    pin(p.grp, f.geometry.coordinates, p.label, p.year === 1977 ? "#b4451f" : "#1b5e8a");
+  });
+  } catch (err) { console.error("工廠點位載入失敗", err); }
+  ready = true;
+  apply(current);
+} catch (err) { window.__setupErr = err.message; showErr("資料載入出錯：" + err.message + "（請按 Ctrl+F5 重新整理）"); ready = false; apply(current); } });
+
+/* ---- 照片：photos/<編號>.jpg 存在就當章首背景，否則用地圖補位 ---- */
+const HAS = {};
+const photoEl = $("photo"), photoCap = $("photoCap");
+let photoOn = false;
+function showPhoto(p) {
+  photoOn = true;
+  photoEl.style.backgroundImage = `url(photos/${p.id}.jpg)`;
+  photoEl.setAttribute("aria-label", p.cap);
+  photoCap.textContent = p.cap + (p.credit ? "｜" + p.credit : "");
+  photoEl.classList.add("on");
+}
+function hidePhoto() { photoOn = false; photoEl.classList.remove("on"); }
+
+/* ---- 章節設定 ----
+   photo：有檔案時改用照片背景（不動地圖）；沒檔案時用 view／show 的地圖補位。
+   show：要顯示的標示群組。route：要顯示的路線。fac：兩間工廠群組。 */
+const STEPS = [
+  /* 0 */ { view: view0, swipe: 0.5, cover: true },
+  /* 1 */ { photo: { id: "P-02", cap: "日治時期的玻璃廠房或矽砂採集" }, view: { center: P.mk, zoom: 11.5 }, show: ["s1a"], soft: true },
+  /* 2 */ { view: { bounds: [P.mk, P.bp, P.jd, P.hc], maxZoom: 11 }, show: ["s1a", "s1b"], route: "s1b", soft: true },
+  /* 3 */ { photo: { id: "P-04", cap: "聖誕燈泡與家庭代工" }, view: { bounds: [P.jn, P.jd, P.hc], maxZoom: 11 }, show: ["s2a"], soft: true },
+  /* 4 */ { view: { center: [120.99, 24.80], zoom: 12.3 }, circles: true, legend: true, show: ["circ"] },
+  /* 5 */ { view: { center: [120.9672, 24.8003], zoom: 15.4 }, swipe: 0.5, show: ["roads"], nz: -1.6 },
+  /* 6 */ { photo: { id: "P-06", cap: "荒廢或拆除中的廠房" }, view: { bounds: [P.sp, P.gm, [120.94, 24.78]], maxZoom: 12 }, show: ["s3a"], ghost: true, soft: true },
+  /* 7 */ { view: { bounds: FAC.hs }, show: ["hs"], route: "hs" },
+  /* 8 */ { view: { bounds: FAC.xs }, show: ["xs"], route: "xs" },
+  /* 9 */ { photo: { id: "P-13", cap: "新竹市立玻璃工藝博物館" }, view: { center: P.gm, zoom: 15 }, show: ["end"] }
+];
+const NAV = [["階段一", 1], ["階段二", 3], ["階段三", 6], ["兩間工廠", 7], ["結語", 9]];
+let current = 0, demoT = 0;
+
+function apply(i) {
+  const s = STEPS[i];
+  navMark(i);
+  if (s.photo && HAS[s.photo.id]) { showSwipe(false, 0); showPhoto(s.photo); return; }   // 有照片：地圖留在原處，不縮放
+  const fromPhoto = photoOn;
+  hidePhoto();
+  showSwipe(s.swipe !== undefined, s.swipe ?? 0);
+  if (ready) { try { overlays(s); } catch (err) { showErr("圖層顯示出錯：" + err.message); } }
+  moveCamera(i, s, fromPhoto);
+}
+function overlays(s) {
+  const vis = (id, on) => map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+  vis("agg-c", s.circles || s.ghost);
+  map.setPaintProperty("agg-c", "circle-opacity", s.ghost ? 0.16 : 0.55);
+  map.setPaintProperty("agg-c", "circle-stroke-opacity", s.ghost ? 0.3 : 1);
+  map.setFilter("routes", ["==", ["get", "g"], s.route || ""]);
+  Object.entries(groups).forEach(([g, els]) => {
+    const on = (s.show || []).includes(g);
+    els.forEach(el => el.style.display = on ? (el.classList.contains("pin") ? "flex" : "block") : "none");
+  });
+  $("legend").style.display = s.legend ? "block" : "none";
+  if (s.circles) { clearTimeout(demoT); demoT = setTimeout(() => { if (STEPS[current].circles) demoPop(); }, REDUCED ? 300 : 2000); }
+  else { clearTimeout(demoT); closePop(); }
+  $("map").classList.toggle("soft", !!s.soft);
+}
+function moveCamera(i, s, fromPhoto) {
+  const narrow = innerWidth < 640, dur = (fromPhoto || REDUCED) ? 0 : 1800;
+  const right = document.querySelector(`.step[data-step="${i}"]`).classList.contains("right");
+  const side = Math.min(640, innerWidth * 0.5);
+  const cardH = Math.min(document.querySelector(`.step[data-step="${i}"] .card`).offsetHeight, innerHeight * 0.56);
+  const v = s.view;
+  if (v.bounds) {
+    const b = new maplibregl.LngLatBounds(); v.bounds.forEach(c => b.extend(c));
+    const pad = narrow ? { top: 80, bottom: cardH + 30, left: 80, right: 80 }
+      : { top: 90, bottom: 90, left: right ? 100 : side, right: right ? side : 100 };
+    map.fitBounds(b, { bearing: 0, padding: pad, duration: dur, maxZoom: Math.min(v.maxZoom ?? 14, narrow ? 13 : 14) });
+  } else {
+    // 把目標點移到卡片以外的空白處的中央；封面不位移
+    const off = s.cover ? [0, 0] : narrow ? [0, -cardH / 2] : [(right ? -1 : 1) * side * 0.45, 0];
+    const o = { bearing: 0, center: v.center, zoom: narrow && !s.cover ? v.zoom + (s.nz ?? -0.6) : v.zoom, offset: off, duration: dur, essential: true };
+    map.easeTo({ ...o, duration: dur });
+  }
+}
+
+/* ---- 導覽列 ---- */
+NAV.forEach(([t, step]) => {
+  const b = document.createElement("button"); b.type = "button"; b.textContent = t; b.dataset.step = step;
+  b.addEventListener("click", () => document.querySelector(`.step[data-step="${step}"]`).scrollIntoView());
+  $("nav").appendChild(b);
+});
+$("nav").insertAdjacentHTML("afterbegin", '<span class="brand">新竹玻璃</span>');
+function navMark(i) {
+  let act = null; NAV.forEach(([, st]) => { if (i >= st) act = st; });
+  $("nav").querySelectorAll("button").forEach(b => b.setAttribute("aria-current", String(+b.dataset.step === act)));
+}
+$("toTop").addEventListener("click", () => scrollTo({ top: 0 }));
+
+/* ---- 圖例（大小對應縮放 12.3 時的圓半徑：3.65 + 3.975√n） ---- */
+[1, 5, 10, 17].forEach(n => {
+  const d = 2 * (3.65 + 3.975 * Math.sqrt(n));
+  $("legend").insertAdjacentHTML("beforeend", `<div class="row"><i style="width:${d}px;height:${d}px"></i>${n} 家</div>`);
+  $("legendInline").insertAdjacentHTML("beforeend", `<span><i style="width:${d}px;height:${d}px"></i>${n} 家</span>`);
+});
+
+/* ---- 照片是否存在 ---- */
+STEPS.forEach(s => {
+  if (!s.photo) return;
+  const img = new Image();
+  img.onload = () => { HAS[s.photo.id] = true; if (STEPS[current] === s) apply(current); };
+  img.src = `photos/${s.photo.id}.jpg`;
+});
+
+/* ---- 捲動觸發 ---- */
+const io = new IntersectionObserver(es => es.forEach(e => {
+  if (e.isIntersecting) { const i = +e.target.dataset.step; if (i !== current) { current = i; apply(i); } }
+}), { rootMargin: "-45% 0px -45% 0px" });
+document.querySelectorAll(".step").forEach(s => io.observe(s));
+addEventListener("scroll", () => {
+  const h = document.documentElement;
+  $("prog").style.width = (h.scrollTop / (h.scrollHeight - h.clientHeight) * 100) + "%";
+}, { passive: true });
+showSwipe(true, 0.5);
+navMark(0);
+$("build").textContent = BUILD;
+
+/* ?debug=1：左下角顯示目前狀態，回報問題時截圖用 */
+if (/[?&]debug/.test(location.search)) {
+  const d = document.createElement("pre");
+  d.style.cssText = "position:fixed;left:8px;bottom:90px;z-index:60;margin:0;padding:6px 8px;background:rgba(0,0,0,.8);color:#9f9;font:11px/1.4 monospace;border-radius:6px;pointer-events:none";
+  document.body.appendChild(d);
+  setInterval(() => {
+    let circ = "-", lbl = 0;
+    try { circ = map.getLayoutProperty("agg-c", "visibility"); } catch (e) {}
+    lbl = [...document.querySelectorAll(".lbl,.pin")].filter(e => getComputedStyle(e).display !== "none").length;
+    d.textContent = `build ${BUILD}
+ready ${ready}  step ${current}
+zoom ${map.getZoom().toFixed(2)}
+circles ${circ}  labels ${lbl}
+tileErr ${tileErr}  setupErr ${window.__setupErr || "-"}
+scrollZoom ${map.scrollZoom.isEnabled()}  dragPan ${map.dragPan.isEnabled()}`;
+  }, 400);
+}
+</script>
+</body>
+</html>
